@@ -15,6 +15,10 @@ pydantic-settings>=2.6.0
 # HTTP client
 httpx>=0.27.0
 
+# Optional: live LLM agent (Databricks Model Serving, OpenAI-compatible).
+# Only used when LIVE_AGENTS env var includes an enabled agent name.
+openai>=1.50.0
+
 # Optional: If you want to add real Gemini API later
 # google-generativeai==0.3.1
 # openai==1.3.7
