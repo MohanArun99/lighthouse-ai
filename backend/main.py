@@ -4,6 +4,7 @@ Enhanced crisis management system with SSE streaming
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,10 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import os
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
@@ -46,6 +51,22 @@ LIVE_AGENTS = {
 # Per-agent live timeout. Demo continues with the scripted card on timeout.
 LIVE_AGENT_TIMEOUT_S = float(os.getenv("LIVE_AGENT_TIMEOUT_S", "12"))
 
+# Live model name (surfaced to the UI in the SSE provenance field).
+LIVE_MODEL = os.getenv("LIVE_MODEL", "databricks-claude-3-7-sonnet")
+
+
+@app.on_event("startup")
+async def _log_live_agents_banner() -> None:
+    if LIVE_AGENTS:
+        logger.info(
+            "Live agents enabled: %s (model=%s, timeout=%.0fs)",
+            sorted(LIVE_AGENTS),
+            LIVE_MODEL,
+            LIVE_AGENT_TIMEOUT_S,
+        )
+    else:
+        logger.info("All agents using scripted demo timeline (LIVE_AGENTS unset)")
+
 
 # Hormuz crisis context shared with live agents. Kept in code so the SSE path
 # stays self-contained; richer context can be threaded later from the alert
@@ -67,17 +88,30 @@ HORMUZ_CRISIS_CONTEXT: Dict[str, Any] = {
 }
 
 
+def _scripted_provenance() -> Dict[str, Any]:
+    return {"source": "scripted"}
+
+
+def _live_provenance(model: str, latency_ms: int) -> Dict[str, Any]:
+    return {"source": "llm", "model": model, "latency_ms": latency_ms}
+
+
+def _fallback_provenance(model: str, reason: str) -> Dict[str, Any]:
+    return {"source": "scripted", "fallback_from": "llm", "model": model, "reason": reason}
+
+
 async def _maybe_live_agent_card(
     scripted_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Return a live LLM-generated card for ``scripted_data['agent']`` if the
     agent is enabled via ``LIVE_AGENTS``; otherwise return ``scripted_data``
-    unchanged. On any failure fall back to ``scripted_data`` so the demo
+    annotated with scripted provenance. On any failure fall back to the
+    scripted card (with ``fallback_from='llm'`` provenance) so the demo
     timeline always completes.
     """
     agent_name = scripted_data.get("agent")
     if not agent_name or agent_name not in LIVE_AGENTS:
-        return scripted_data
+        return {**scripted_data, "provenance": _scripted_provenance()}
 
     if agent_name == "Financial Hedge Strategist":
         try:
@@ -86,8 +120,12 @@ async def _maybe_live_agent_card(
             )
         except Exception as exc:
             logger.warning("financial_hedge live agent import failed: %s", exc)
-            return scripted_data
+            return {
+                **scripted_data,
+                "provenance": _fallback_provenance(LIVE_MODEL, f"import_error: {exc}"),
+            }
 
+        started = time.monotonic()
         try:
             live_card = await asyncio.wait_for(
                 generate_financial_hedge_card(
@@ -96,21 +134,28 @@ async def _maybe_live_agent_card(
                 ),
                 timeout=LIVE_AGENT_TIMEOUT_S,
             )
-            return live_card
+            latency_ms = int((time.monotonic() - started) * 1000)
+            return {**live_card, "provenance": _live_provenance(LIVE_MODEL, latency_ms)}
         except asyncio.TimeoutError:
             logger.warning(
                 "financial_hedge live agent timed out after %.1fs; using scripted card",
                 LIVE_AGENT_TIMEOUT_S,
             )
-            return scripted_data
+            return {
+                **scripted_data,
+                "provenance": _fallback_provenance(LIVE_MODEL, "timeout"),
+            }
         except Exception as exc:
             logger.warning(
                 "financial_hedge live agent failed (%s); using scripted card",
                 exc,
             )
-            return scripted_data
+            return {
+                **scripted_data,
+                "provenance": _fallback_provenance(LIVE_MODEL, str(exc)[:80]),
+            }
 
-    return scripted_data
+    return {**scripted_data, "provenance": _scripted_provenance()}
 
 
 class CrisisScenario(BaseModel):
