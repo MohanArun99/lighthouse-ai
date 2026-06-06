@@ -19,3 +19,14 @@ httpx>=0.27.0
 # Optional: If you want to add real AI API integration later
 # google-generativeai>=0.3.1
 # openai>=1.3.7
+
+# ============================================================================
+# OPTIONAL: LLM Integration (Feature Branch: feature/llm_integration)
+# ============================================================================
+# Uncomment to enable real AI agent reasoning (not needed for demo mode)
+
+# For Gemini API (recommended, like Globot uses)
+# google-generativeai>=0.3.1
+
+# For OpenAI GPT-4 (alternative)
+# openai>=1.3.7
