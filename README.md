@@ -128,6 +128,102 @@ NORMAL → ALERT_DETECTED → AGENTS_REASONING → DEBATE → AWAITING_APPROVAL 
 
 ---
 
+## 🌐 How it works in production
+
+The **"Start Crisis Scenario"** button is a demo affordance. In a real deployment **no human clicks it** — the crisis pipeline is event-driven from continuous data ingestion. This section documents the production architecture and points at the specific files that change as you move from scripted demo to live data.
+
+### Trigger sources (any can fire the pipeline)
+
+| Source | Mechanism | Latency | Example |
+| --- | --- | --- | --- |
+| **Push from a data provider** | Webhook → POST endpoint | seconds | Reuters/Bloomberg sends a "Strait of Hormuz tension" story to `POST /webhooks/reuters` |
+| **Streaming feed** | Kafka / Pub/Sub / Kinesis consumer | sub-second | AIS vessel-tracking stream emits a "vessel diverted" event |
+| **Polling job** | Cron / Airflow / Temporal worker | 30 s – 5 min | Every minute query MarineTraffic API; flag if N vessels stop in a chokepoint |
+| **Threshold alarm** | Time-series rule engine (Datadog / Prometheus / custom) | seconds | Brent crude futures move > 3% in 15 minutes |
+| **Image diff job** | Periodic satellite-tile pull → vision model → diff vs baseline | minutes | Sentinel-2 tiles show 12+ naval vessels in a chokepoint vs baseline |
+| **Operator override** | UI button (the only path you have today) | — | NOC manager manually triggers based on private intel |
+
+### Production flow
+
+```
+                 ┌─────────────────────────────────────────────┐
+ (1) ingest   →  │  Reuters · Bloomberg · AIS · Sentinel-2 ·   │
+                 │  CME · Insurance markets · Sanction lists   │
+                 └───────────────────┬─────────────────────────┘
+                                     │  push or pull
+                                     ▼
+ (2) detect   →  ┌─────────────────────────────────────────────┐
+                 │  Detector(s): rules + small ML models       │
+                 │  Output: typed `crisis_alert` event with    │
+                 │  severity, location, affected_assets        │
+                 └───────────────────┬─────────────────────────┘
+                                     │  publish
+                                     ▼
+ (3) bus      →  ┌─────────────────────────────────────────────┐
+                 │  Event broker (Kafka / Pub-Sub)             │
+                 │  topic: `crisis.alerts`                     │
+                 └───────────────────┬─────────────────────────┘
+                                     │  fan-out
+                                     ▼
+ (4) orchestr →  ┌─────────────────────────────────────────────┐
+                 │  Crisis orchestrator (LangGraph / Temporal /│
+                 │  CrewAI / custom asyncio).  Spawns the 5    │
+                 │  agents in parallel; collects partial       │
+                 │  results; runs adversarial debate; emits a  │
+                 │  recommendation.                            │
+                 └───────────────────┬─────────────────────────┘
+                                     │  emits step events
+        ┌────────────────────────────┼────────────────────────────┐
+        ▼                            ▼                            ▼
+ (5a) UI push           (5b) ops integrations        (5c) durable store
+ SSE / WebSocket to    Slack · PagerDuty · Email ·   Postgres + S3
+ ops dashboards (the   Mobile push · ServiceNow      audit trail of every
+ only path today)      ticket                        agent step, tool call,
+                                                     decision
+                                     │
+                                     ▼
+ (6) HITL     →  Decision approval (the "Approve & Execute" button) routed
+                 by policy (e.g. > $1M decisions → COO; otherwise → NOC).
+                                     │
+                                     ▼
+ (7) execute  →  Trading API places hedge · Fleet management API reroutes ·
+                 Insurance broker API amends war-risk cover · Twilio /
+                 SendGrid notifies clients · ERP updated.
+```
+
+### Mapping to this codebase
+
+The repo today implements only steps **(4)** orchestrate, **(5a)** UI push, and **(6)** HITL — and step (4) is scripted. The production path is:
+
+1. **Replace** `POST /api/demo/trigger-crisis` in `backend/main.py` with passive ingest endpoints / consumers — e.g. `POST /webhooks/reuters` (signed by provider), an `asyncio` Kafka consumer, and a Temporal/cron worker that polls feeds. All of them emit a normalized `CrisisAlert` event. The current demo button becomes one debug ingress among many.
+
+2. **Add a detection layer** under `backend/detection/` that classifies raw signals into typed `CrisisAlert`s with `severity`, `location`, and `affected_assets`. This is what populates the `crisis_context` dict that today is hardcoded as `HORMUZ_CRISIS_CONTEXT` in `backend/main.py`.
+
+3. **Replace** `crisis_sequence.get_crisis_timeline()` with a real orchestrator that runs the 5 agents in parallel (`asyncio.gather`). The Financial Hedge Strategist on the [`feature/llm_integration`](#) branch is a worked example: a Claude-skill-driven LLM agent backed by deterministic calculator tools (`backend/claude_skill/financial_hedging/`).
+
+4. **Persist everything** to Postgres (incidents, decisions, audit log) + S3 (raw evidence: news payloads, satellite tiles, agent traces). Today agent output exists only as transient SSE events.
+
+5. **Multi-tenant fan-out.** Replace the 1:1 `EventSource` with WebSocket / Redis pub-sub (or a managed service like Pusher/Ably) so the same alert reaches every subscriber with policy interest.
+
+6. **Policy-routed HITL.** The `/api/decision/approve` endpoint should consult an approval policy (decision threshold, role, geography, etc.) and route via Slack/mobile push to the right approver — not just accept any caller.
+
+7. **Execution integrations.** Today `/api/decision/approve` just returns success. In production, approval triggers real side-effects: trading API to place the hedge, fleet management (e.g. Veson IMOS) to update voyage plans, insurance broker to amend war-risk cover, and customer notifications via Twilio / SendGrid.
+
+### The single line that captures the shift
+
+```python
+# backend/main.py — crisis_event_generator()
+from demo.crisis_sequence import get_crisis_timeline
+timeline = get_crisis_timeline()        # ← scripted today
+
+# In production:
+# timeline = await orchestrator.handle(alert)   # alert came from step (3)
+```
+
+Everything **downstream** of that line — the SSE event shape, the `LIVE`/`DEMO` provenance chip, the `AgentThinkingCard` schema, the HITL approve flow — stays the same. The wire format and UI are already production-correct; only the *source* of agent reasoning needs to change from script → orchestrator.
+
+---
+
 ## 🎨 "Wow Moments" Checklist
 
 * ✅ **Crisis Alarm**: Screen pulses red when alert triggers
