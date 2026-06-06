@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL = "databricks-claude-3-7-sonnet"
-DEFAULT_MAX_TOOL_ROUNDS = 4
+DEFAULT_MAX_TOOL_ROUNDS = 6
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,10 @@ def _build_client() -> Any:
             "DATABRICKS_HOST / DATABRICKS_TOKEN not set; live agent disabled"
         )
 
-    base_url = host.rstrip("/") + "/serving-endpoints"
+    host = host.strip().rstrip("/")
+    if not host.startswith(("http://", "https://")):
+        host = "https://" + host
+    base_url = f"{host}/serving-endpoints"
     return OpenAI(api_key=token, base_url=base_url)
 
 
@@ -284,8 +287,25 @@ async def generate_financial_hedge_card(
     ]
 
     started = time.monotonic()
+    tool_calls_summary: List[str] = []
 
     for round_idx in range(max_tool_rounds):
+        is_final_round = round_idx == max_tool_rounds - 1
+
+        # On the final round, force a text answer so the loop always
+        # terminates (some tool-loving models otherwise call tools forever).
+        if is_final_round:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "STOP calling tools. Emit ONLY the final JSON object "
+                        "described in the system prompt now, using the tool "
+                        "results already gathered. No tool calls, no prose."
+                    ),
+                }
+            )
+
         # The OpenAI SDK is sync; run it in a worker thread so we don't block
         # the FastAPI event loop / SSE generator.
         response = await asyncio.to_thread(
@@ -293,7 +313,7 @@ async def generate_financial_hedge_card(
             model=model,
             messages=messages,
             tools=tools,
-            tool_choice="auto",
+            tool_choice="none" if is_final_round else "auto",
             temperature=0.3,
             max_tokens=900,
         )
@@ -303,7 +323,6 @@ async def generate_financial_hedge_card(
 
         tool_calls = getattr(message, "tool_calls", None) or []
 
-        # Append the assistant turn so the conversation history is valid.
         assistant_turn: Dict[str, Any] = {
             "role": "assistant",
             "content": message.content or "",
@@ -333,9 +352,11 @@ async def generate_financial_hedge_card(
             card = AgentCard(**payload)
             elapsed = time.monotonic() - started
             logger.info(
-                "live financial_hedge agent ok in %.2fs (rounds=%d)",
-                elapsed,
+                "live financial_hedge ok model=%s rounds=%d elapsed=%.2fs tools=%s",
+                model,
                 round_idx + 1,
+                elapsed,
+                tool_calls_summary or ["<none>"],
             )
             return card.model_dump()
 
@@ -344,6 +365,12 @@ async def generate_financial_hedge_card(
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
+            tool_calls_summary.append(tc.function.name)
+            logger.info(
+                "live financial_hedge tool=%s args=%s",
+                tc.function.name,
+                {k: v for k, v in args.items() if k != "exposure"} or "<empty>",
+            )
             tool_result = _execute_tool(tc.function.name, args)
             messages.append(
                 {

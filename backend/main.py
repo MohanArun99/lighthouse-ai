@@ -4,6 +4,7 @@ Enhanced crisis management system with SSE streaming
 import asyncio
 import json
 import logging
+import os
 import time
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
@@ -11,7 +12,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-import os
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
