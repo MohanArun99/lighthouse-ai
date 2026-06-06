@@ -1,0 +1,24 @@
+# Lighthouse AI Backend Requirements
+
+# FastAPI and web server
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# CORS and middleware
+python-dotenv==1.0.0
+
+# Data validation
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# HTTP client
+httpx==0.25.2
+
+# Optional: If you want to add real Gemini API later
+# google-generativeai==0.3.1
+# openai==1.3.7
+
+# Optional: For database support (if needed)
+# psycopg2-binary==2.9.9
+# sqlalchemy==2.0.23

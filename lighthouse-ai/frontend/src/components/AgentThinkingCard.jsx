@@ -1,0 +1,171 @@
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, Typography, Box, Chip, LinearProgress } from '@mui/material';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import ErrorIcon from '@mui/icons-material/Error';
+
+const AgentThinkingCard = ({ agent, icon, status, steps, sources, conclusion }) => {
+  const [displayedSteps, setDisplayedSteps] = useState([]);
+  const [elapsedTime, setElapsedTime] = useState(0);
+
+  useEffect(() => {
+    // Animate steps appearing one by one
+    if (steps && steps.length > 0) {
+      steps.forEach((step, index) => {
+        setTimeout(() => {
+          setDisplayedSteps((prev) => [...prev, step]);
+        }, index * 1000);
+      });
+    }
+  }, [steps]);
+
+  useEffect(() => {
+    // Elapsed time counter
+    const interval = setInterval(() => {
+      setElapsedTime((t) => t + 0.1);
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
+
+  const getStatusIcon = (stepStatus) => {
+    switch (stepStatus) {
+      case 'complete':
+        return <CheckCircleIcon sx={{ color: 'success.main', fontSize: 20 }} />;
+      case 'in_progress':
+        return <HourglassEmptyIcon sx={{ color: 'warning.main', fontSize: 20 }} />;
+      case 'error':
+        return <ErrorIcon sx={{ color: 'error.main', fontSize: 20 }} />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <Card
+      sx={{
+        mb: 2,
+        background: 'rgba(13, 27, 42, 0.9)',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(66, 153, 225, 0.3)',
+        boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+        transition: 'all 0.3s ease',
+        '&:hover': {
+          transform: 'translateY(-2px)',
+          boxShadow: '0 12px 40px rgba(66, 153, 225, 0.2)',
+        },
+      }}
+    >
+      <CardContent>
+        <Box display="flex" justifyContent="space-between" alignItems="center" mb={2}>
+          <Box display="flex" alignItems="center" gap={1}>
+            <Typography variant="h4" sx={{ fontSize: 24 }}>
+              {icon}
+            </Typography>
+            <Typography variant="h6" sx={{ color: 'primary.light', fontWeight: 600 }}>
+              {agent}
+            </Typography>
+          </Box>
+          <Chip
+            label={status === 'analyzing' ? 'ANALYZING...' : 'COMPLETE'}
+            size="small"
+            sx={{
+              bgcolor: status === 'analyzing' ? 'warning.main' : 'success.main',
+              color: 'white',
+              fontWeight: 'bold',
+              animation: status === 'analyzing' ? 'pulse 2s infinite' : 'none',
+            }}
+          />
+        </Box>
+
+        {/* Reasoning Steps */}
+        <Box sx={{ borderLeft: '2px solid rgba(66, 153, 225, 0.3)', pl: 2, mb: 2 }}>
+          {displayedSteps.map((step, index) => (
+            <Box
+              key={index}
+              display="flex"
+              alignItems="center"
+              gap={1}
+              mb={1}
+              sx={{
+                animation: 'fadeInUp 0.5s ease',
+                '@keyframes fadeInUp': {
+                  from: { opacity: 0, transform: 'translateY(10px)' },
+                  to: { opacity: 1, transform: 'translateY(0)' },
+                },
+              }}
+            >
+              {getStatusIcon(step.status)}
+              <Typography
+                variant="body2"
+                sx={{
+                  color: 'text.secondary',
+                  flex: 1,
+                  fontFamily: 'monospace',
+                }}
+              >
+                Step {step.step}: {step.description}
+              </Typography>
+              {step.duration > 0 && (
+                <Typography
+                  variant="caption"
+                  sx={{ color: 'text.disabled', fontFamily: 'monospace' }}
+                >
+                  {step.duration.toFixed(1)}s
+                </Typography>
+              )}
+            </Box>
+          ))}
+        </Box>
+
+        {/* Conclusion */}
+        {conclusion && displayedSteps.length === steps?.length && (
+          <Box
+            sx={{
+              p: 2,
+              bgcolor: 'rgba(66, 153, 225, 0.1)',
+              borderRadius: 1,
+              mb: 2,
+              animation: 'fadeIn 0.5s ease',
+              '@keyframes fadeIn': {
+                from: { opacity: 0 },
+                to: { opacity: 1 },
+              },
+            }}
+          >
+            <Typography variant="body2" sx={{ color: 'primary.light', fontWeight: 500 }}>
+              {conclusion}
+            </Typography>
+          </Box>
+        )}
+
+        {/* Sources and Time */}
+        <Box display="flex" justifyContent="space-between" alignItems="center">
+          <Box display="flex" gap={0.5} flexWrap="wrap">
+            {sources?.map((source, index) => (
+              <Chip
+                key={index}
+                label={source}
+                size="small"
+                variant="outlined"
+                sx={{
+                  borderColor: 'primary.main',
+                  color: 'primary.light',
+                  fontSize: 10,
+                  height: 20,
+                }}
+              />
+            ))}
+          </Box>
+          <Typography
+            variant="caption"
+            sx={{ color: 'text.disabled', fontFamily: 'monospace' }}
+          >
+            ⏱️ {elapsedTime.toFixed(1)}s elapsed
+          </Typography>
+        </Box>
+      </CardContent>
+    </Card>
+  );
+};
+
+export default AgentThinkingCard;
